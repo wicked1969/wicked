@@ -1,0 +1,783 @@
+set autocommit=0;
+start transaction;
+commit;
+rollback;
+
+/********************************************************************************************************************************************************************************************************/
+-- 대회에서 쳐야할 코스와 회원이 친 코스의 조합 목록
+select	a.member_seq, b.nick_name, b.skil_level, a.golf_club_id, b.game_seq, b.status, b.progress_hole_num, b.score
+from	(
+			select	member_seq, golf_club_id
+			from	(
+						select	distinct b.member_seq 
+						from	games a,
+								game_join_members b 
+						where	a.contest_seq = 50
+						and		a.game_seq = b.game_seq
+					) a
+					cross join (select golf_club_id from contest_golf_system_clubs where contest_seq = 50) b
+		) a
+		left join
+		(
+			select	b.member_seq, c.nick_name, ifnull(c.skil_level,0) as skil_level, a.golf_club_id, a.game_seq, a.status, a.progress_hole_num, b.score
+			from	games a,
+					game_join_members b,
+					members c
+			where	a.contest_seq = 50
+			and		a.game_seq = b.game_seq
+			and		b.member_seq = c.member_seq
+		) b
+		on (a.member_seq = b.member_seq and a.golf_club_id = b.golf_club_id)
+
+
+
+		
+1. 홈페이지 대회 랭킹
+	입력 : 대회번호
+	0) 18홀까지 종료한 게임에 대해서 랭킹을 계산
+	1) 코스 합산 및 개별 코스별 최저 점수를 보여줘야 함
+	2) 랭킹은 코스 합산으로 해야함.
+	3) 한 코스라도 안 친 회원은 랭킹에서 빠져야 함
+
+select	a.member_seq, c.nick_name, c.nick_photo, c.user_id, a.score, a.ranking, a.course_count, a.round_count as rounding_count, b.golf_club_id, b.course_kind, b.course_score, all_revision as revision, revision_score
+from	(
+			select	RANK() OVER (order by revision_score asc) as ranking, a.member_seq, a.nick_name, a.user_id, a.gender, a.skil_level, 
+					a.score, a.revision_score, a.course_count, a.round_count,
+					a.female_revision+a.skil_revision+a.round_revision as all_revision, a.female_revision, a.skil_revision, a.round_revision
+			from	(
+						select	a.member_seq, a.nick_name, a.user_id, a.gender, a.skil_level, a.score, a.course_count, a.round_count,
+								if(a.gender='female', a.course_count*b.female_revision,0) as female_revision,
+								b.skil_revision*a.course_count as skil_revision,
+								b.round_revision as round_revision,
+								(score + if(a.gender='female', a.course_count*b.female_revision,0) + b.skil_revision*a.course_count + b.round_revision) as revision_score
+						from	(
+									select	a.member_seq, b.nick_name, b.user_id, b.gender, b.skil_level, a.score, a.course_count, a.round_count
+									from	(
+												select	a.member_seq, sum(score) as score, count(*) as course_count, sum(round_count) as round_count
+												from	(
+															select	b.member_seq, a.golf_club_id, min(ifnull(score,0)) as score, count(*) as round_count
+															from	games a,
+																	game_join_members b
+															where	a.contest_seq = 69
+															and		a.status = 'end' 
+															and progress_hole_num = 18
+															and		a.game_seq = b.game_seq
+															group by b.member_seq, a.golf_club_id
+														) a
+												group by member_seq
+												having count(*) = (select count(*) from contest_golf_system_clubs where contest_seq = 69)
+											) a,
+											members b
+									where	a.member_seq = b.member_seq
+								) a,
+								(
+									select	a.contest_seq, a.female_revision, b.skil_level_id, b.skil_revision, 
+											ifnull(c.round_count1,0) as round_count1, ifnull(c.round_count2,9999) as round_count2, ifnull(c.round_revision,0) as round_revision 
+									from	contests a 
+											cross join
+											(
+												select	b.contest_seq, a.skil_level_id, ifnull(b.skil_revision,0) as skil_revision 
+												from	skil_levels a 
+														left join
+														contest_skil_level_revisions b
+														on(a.skil_level_id = b.skil_level_id and b.contest_seq = 69)
+											) b
+											left join (select * from contest_round_revisions where contest_seq = 69) c
+											on (a.contest_seq = c.contest_seq)
+									where	a.contest_seq = 69
+								) b
+						where	a.skil_level = b.skil_level_id
+						and		a.round_count between b.round_count1 and b.round_count2
+					) a
+		) a,
+		(
+			select	b.member_seq, a.golf_club_id, course_kind, min(b.score) as course_score
+			from	games a,
+					game_join_members b,
+					contest_golf_system_clubs c
+			where	a.contest_seq = 69
+			and		a.status = 'end' 
+			and 	a.progress_hole_num = 18									
+			and		a.game_seq = b.game_seq
+			and		a.contest_seq = c.contest_seq
+			and		a.golf_club_id = c.golf_club_id 
+			group by b.member_seq, golf_club_id, course_kind 
+		) b,
+		members c
+where	a.member_seq = b.member_seq		
+and		a.member_seq = c.member_seq
+order by ranking, member_seq, course_kind
+
+
+// 구버전
+select	a.member_seq, c.nick_name, c.nick_photo, c.user_id, a.score, a.ranking, a.course_count, a.rounding_count, b.golf_club_id, b.course_kind, b.course_score, revision, revision_score
+from	(
+			select	member_seq, score, RANK() OVER (order by revision_score asc) as ranking, course_count, rounding_count, revision, revision_score
+			from	(
+						select	a.member_seq, a.score, a.course_count, a.rounding_count, 
+								if(b.gender = 'female',-1*a.course_count,0) as revision, (a.score + if(b.gender = 'female',-1*a.course_count,0)) as revision_score
+						from	(
+									select	member_seq, sum(course_score) as score, count(*) as course_count, sum(course_rounding_count) as rounding_count
+									from	(	
+												select	b.member_seq, a.golf_club_id, min(b.score) as course_score, count(*) as course_rounding_count
+												from	games a,
+														game_join_members b
+												where	a.contest_seq = 50
+												and		a.game_seq = b.game_seq
+												and		a.status = 'end' 
+												and 	a.progress_hole_num = 18									
+												group by b.member_seq, a.golf_club_id
+											) a
+											group by member_seq
+											having count(*) = (select count(*) from contest_golf_system_clubs where contest_seq = 50)
+								) a,
+								members b
+						where	a.member_seq = b.member_seq		
+					) a
+		) a,
+		(
+			select	b.member_seq, a.golf_club_id, course_kind, min(b.score) as course_score
+			from	games a,
+					game_join_members b,
+					contest_golf_system_clubs c
+			where	a.contest_seq = 50
+			and		a.status = 'end' 
+			and 	a.progress_hole_num = 18									
+			and		a.game_seq = b.game_seq
+			and		a.contest_seq = c.contest_seq
+			and		a.golf_club_id = c.golf_club_id 
+			group by b.member_seq, golf_club_id, course_kind 
+		) b,
+		members c
+where	a.member_seq = b.member_seq		
+and		a.member_seq = c.member_seq
+order by ranking, member_seq, course_kind
+;
+
+
+2. 시뮬레이터에 30위까지 전달하는 api
+	입력 : 대회번호
+	1) 3. 을 기준으로 30위까지 전달
+	2) 코스별 스코어 포함
+	
+		select	x.member_seq, x.nick_name, x.score, x.ranking, y.golf_club_id, y.course_kind, y.score as course_score, round_count as rounding_count,
+				ifnull(m.status,'end') as status, ifnull(m.progress_hole_num,18) as progress_hole_num,
+				revision, revision_score
+		from	(
+					select	member_seq, nick_name, score, ranking, all_revision as revision, revision_score, round_count
+					from	(
+								select	RANK() OVER (order by revision_score asc) as ranking, a.member_seq, a.nick_name, a.user_id, a.gender, a.skil_level, 
+										a.score, a.revision_score, a.course_count, a.round_count,
+										a.female_revision+a.skil_revision+a.round_revision as all_revision, a.female_revision, a.skil_revision, a.round_revision
+								from	(
+											select	a.member_seq, a.nick_name, a.user_id, a.gender, a.skil_level, a.score, a.course_count, a.round_count,
+													if(a.gender='female', a.course_count*b.female_revision,0) as female_revision,
+													b.skil_revision*a.course_count as skil_revision,
+													b.round_revision as round_revision,
+													(score + if(a.gender='female', a.course_count*b.female_revision,0) + b.skil_revision*a.course_count + b.round_revision) as revision_score
+											from	(
+														select	a.member_seq, b.nick_name, b.user_id, b.gender, b.skil_level, a.score, a.course_count, a.round_count
+														from	(
+																	select	a.member_seq, sum(score) as score, count(*) as course_count, sum(round_count) as round_count
+																	from	(
+																				select	b.member_seq, a.golf_club_id, min(ifnull(score,0)) as score, count(*) as round_count
+																				from	games a,
+																						game_join_members b
+																				where	a.contest_seq = 50
+																				and		((a.status = 'end' and a.progress_hole_num = 18) or a.status = 'start')
+																				and		a.game_seq = b.game_seq
+																				group by b.member_seq, a.golf_club_id
+																			) a
+																	group by member_seq
+																) a,
+																members b
+														where	a.member_seq = b.member_seq
+													) a,
+													(
+														select	a.contest_seq, a.female_revision, b.skil_level_id, b.skil_revision, 
+																ifnull(c.round_count1,0) as round_count1, ifnull(c.round_count2,9999) as round_count2, ifnull(c.round_revision,0) as round_revision 
+														from	contests a 
+																cross join
+																(
+																	select	b.contest_seq, a.skil_level_id, ifnull(b.skil_revision,0) as skil_revision 
+																	from	skil_levels a 
+																			left join
+																			contest_skil_level_revisions b
+																			on(a.skil_level_id = b.skil_level_id and b.contest_seq = 50)
+																) b
+																left join (select * from contest_round_revisions where contest_seq = 50) c
+																on (a.contest_seq = c.contest_seq)
+														where	a.contest_seq = 50
+													) b
+											where	a.skil_level = b.skil_level_id
+											and		a.round_count between b.round_count1 and b.round_count2
+										) a
+							) a
+					where	ranking <= 30
+				) x,
+				(
+					select	b.member_seq, c.nick_name, a.golf_club_id, d.course_kind, min(score) as score
+					from	games a,
+							game_join_members b,
+							members c,
+							contest_golf_system_clubs d
+					where	a.contest_seq = 50
+					and		a.game_seq = b.game_seq
+					and		((a.status = 'end' and a.progress_hole_num = 18) or a.status = 'start')
+					and		b.member_seq = c.member_seq
+					and		a.contest_seq = d.contest_seq
+					and		a.golf_club_id = d.golf_club_id
+					group by member_seq, nick_name, a.golf_club_id, d.course_kind
+				) y
+				left join (
+					select	a.member_seq, b.status, b.progress_hole_num 
+					from	game_join_members a,
+							games b
+					where	a.game_seq = b.game_seq
+					and		b.contest_seq = 50
+					and		b.status = 'start'					
+				) m on (y.member_seq = m.member_seq)				
+		where	x.member_seq = y.member_seq		
+		order by ranking, member_seq, course_kind
+		;
+
+		// 구버전
+		select	x.member_seq, x.nick_name, x.score, x.ranking, y.golf_club_id, y.course_kind, y.score as course_score, rounding_count,
+				ifnull(m.status,'end') as status, ifnull(m.progress_hole_num,18) as progress_hole_num,
+				revision, revision_score
+		from	(
+					select	member_seq, nick_name, score, ranking, revision, revision_score
+					from	(
+								select	member_seq, nick_name, score, RANK() OVER (order by revision_score asc) as ranking, revision, revision_score
+								from	(
+											select	a.member_seq, a.nick_name, score, course_count, 
+													if(b.gender='female',-1*course_count,0) as revision, score + if(b.gender='female',-1*course_count,0) as revision_score 
+											from	(
+														select	member_seq, nick_name, sum(score) as score, count(*) as course_count
+														from	(
+																	select	b.member_seq, c.nick_name, golf_club_id, min(ifnull(score,0)) as score
+																	from	games a,
+																			game_join_members b,
+																			members c
+																	where	a.contest_seq = #{contest_seq}
+																	and		a.game_seq = b.game_seq
+																	and		((a.status = 'end' and a.progress_hole_num = 18) or a.status = 'start')
+																	and		b.member_seq = c.member_seq
+																	group by member_seq, nick_name, golf_club_id
+																) a
+														group by member_seq, nick_name	
+													) a,
+													members b
+											where	a.member_seq = b.member_seq
+										) a
+							) a
+					where	ranking <![CDATA[<=]]> 30
+				) x,
+				(
+					select	b.member_seq, c.nick_name, a.golf_club_id, d.course_kind, min(score) as score
+					from	games a,
+							game_join_members b,
+							members c,
+							contest_golf_system_clubs d
+					where	a.contest_seq = #{contest_seq}
+					and		a.game_seq = b.game_seq
+					and		((a.status = 'end' and a.progress_hole_num = 18) or a.status = 'start')
+					and		b.member_seq = c.member_seq
+					and		a.contest_seq = d.contest_seq
+					and		a.golf_club_id = d.golf_club_id
+					group by member_seq, nick_name, a.golf_club_id, d.course_kind
+				) y,
+				(
+					select	b.member_seq, count(*) as rounding_count
+					from	games a,
+							game_join_members b
+					where	a.contest_seq = #{contest_seq}
+					and		((a.status = 'end' and a.progress_hole_num = 18) or a.status = 'start')
+					and		a.game_seq = b.game_seq
+					group by b.member_seq
+				) z
+				left join (
+					select	a.member_seq, b.status, b.progress_hole_num 
+					from	game_join_members a,
+							games b
+					where	a.game_seq = b.game_seq
+					and		b.contest_seq = #{contest_seq}
+					and		b.status = 'start'					
+				) m on (z.member_seq = m.member_seq)				
+		where	x.member_seq = y.member_seq		
+		and		x.member_seq = z.member_seq	
+		order by ranking, member_seq, course_kind
+
+
+	
+3. 시뮬레이터에 현재 플레이어하는 회원의 코스 합산 랭킹을 전달함
+	입력 : 대회번호, 게임아이디
+	0) 현재 진행중인 게임을 포함하여 랭킹을 계산
+	1) 코스 합산의 랭킹을 전달함
+	2) 안친 코스는 0점으로 처리함 (=친코스의 최저점수의 합산)
+
+
+		select	a.member_seq, c.team_seq, c.join_member_seq, a.nick_name, a.score, a.ranking, a.all_revision as revision, a.revision_score
+		from	(
+					select	RANK() OVER (order by revision_score asc) as ranking, a.member_seq, a.nick_name, a.user_id, a.gender, a.skil_level, 
+							a.score, a.revision_score, a.course_count, a.round_count,
+							a.female_revision+a.skil_revision+a.round_revision as all_revision, a.female_revision, a.skil_revision, a.round_revision
+					from	(
+								select	a.member_seq, a.nick_name, a.user_id, a.gender, a.skil_level, a.score, a.course_count, a.round_count,
+										if(a.gender='female', a.course_count*b.female_revision,0) as female_revision,
+										b.skil_revision*a.course_count as skil_revision,
+										b.round_revision as round_revision,
+										(score + if(a.gender='female', a.course_count*b.female_revision,0) + b.skil_revision*a.course_count + b.round_revision) as revision_score
+								from	(
+											select	a.member_seq, b.nick_name, b.user_id, b.gender, b.skil_level, a.score, a.course_count, a.round_count
+											from	(
+														select	a.member_seq, sum(score) as score, count(*) as course_count, sum(round_count) as round_count
+														from	(
+																	select	b.member_seq, a.golf_club_id, min(ifnull(score,0)) as score, count(*) as round_count
+																	from	games a,
+																			game_join_members b
+																	where	a.contest_seq = 50
+																	and		((a.status = 'end' and a.progress_hole_num = 18) or a.status = 'start')
+																	and		a.game_seq = b.game_seq
+																	group by b.member_seq, a.golf_club_id
+																) a
+														group by member_seq
+													) a,
+													members b
+											where	a.member_seq = b.member_seq
+										) a,
+										(
+											select	a.contest_seq, a.female_revision, b.skil_level_id, b.skil_revision, 
+													ifnull(c.round_count1,0) as round_count1, ifnull(c.round_count2,9999) as round_count2, ifnull(c.round_revision,0) as round_revision 
+											from	contests a 
+													cross join
+													(
+														select	b.contest_seq, a.skil_level_id, ifnull(b.skil_revision,0) as skil_revision 
+														from	skil_levels a 
+																left join
+																contest_skil_level_revisions b
+																on(a.skil_level_id = b.skil_level_id and b.contest_seq = 50)
+													) b
+													left join (select * from contest_round_revisions where contest_seq = 50) c
+													on (a.contest_seq = c.contest_seq)
+											where	a.contest_seq = 50
+										) b
+								where	a.skil_level = b.skil_level_id
+								and		a.round_count between b.round_count1 and b.round_count2
+							) a
+				) a,
+				games b,
+				game_join_members c
+		where	b.game_id = '18-31-BF-C9-2B-23.20210322090129'
+		and		b.game_seq = c.game_seq
+		and		a.member_seq = c.member_seq
+		order by ranking
+		;
+
+// 구버전
+		select	a.member_seq, c.team_seq, c.join_member_seq, a.nick_name, a.score, a.ranking, a.revision, a.revision_score
+		from	(
+					select	member_seq, nick_name, score, RANK() OVER (order by revision_score asc) as ranking, revision, revision_score
+					from	(
+								select	a.member_seq, a.nick_name, score, course_count, 
+										if(b.gender='female',-1*course_count,0) as revision, score + if(b.gender='female',-1*course_count,0) as revision_score 
+								from	(
+											select	member_seq, nick_name, sum(score) as score, count(*) as course_count
+											from	(
+														select	b.member_seq, c.nick_name, golf_club_id, min(ifnull(score,0)) as score
+														from	games a,
+																game_join_members b,
+																members c
+														where	a.contest_seq = #{contest_seq}
+														and		a.game_seq = b.game_seq
+														and		((a.status = 'end' and a.progress_hole_num = 18) or a.status = 'start')
+														and		b.member_seq = c.member_seq
+														group by member_seq, nick_name, golf_club_id
+													) a
+											group by member_seq, nick_name	
+										) a,
+										members b
+								where	a.member_seq = b.member_seq
+							) x
+				) a,
+				games b,
+				game_join_members c
+		where	b.game_id = #{game_id}
+		and		b.game_seq = c.game_seq
+		and		a.member_seq = c.member_seq
+		order by ranking
+
+
+
+	
+4. 시뮬레이터에 현재 플레이하는 회원의 현재 코스 랭킹을 상하5건을 전달함
+	입력 : 대회번호, 게임아이디
+	0) 현재 진행중인 게임을 포함하여 랭킹을 계산
+	1) 현재 코스의 랭킹을 전달함
+
+
+select	a.member_seq as me_member_seq, a.nick_name as me_nick_name, a.score as me_score, a.ranking as me_ranking, a.all_revision as me_revision, a.revision_score as me_revision_score,
+		b.member_seq, b.nick_name, b.score, b.ranking, b.all_revision as revision, b.revision_score
+from	(
+			select	a.member_seq, a.nick_name, a.score, a.ranking, a.all_revision, revision_score
+			from	(
+						select	RANK() OVER (order by revision_score asc) as ranking, a.member_seq, a.nick_name, a.user_id, a.gender, a.skil_level, 
+								a.score, a.revision_score, a.course_count, a.round_count,
+								a.female_revision+a.skil_revision+a.round_revision as all_revision, a.female_revision, a.skil_revision, a.round_revision
+						from	(
+									select	a.member_seq, a.nick_name, a.user_id, a.gender, a.skil_level, a.score, a.course_count, a.round_count,
+											if(a.gender='female', a.course_count*b.female_revision,0) as female_revision,
+											b.skil_revision*a.course_count as skil_revision,
+											b.round_revision as round_revision,
+											(score + if(a.gender='female', a.course_count*b.female_revision,0) + b.skil_revision*a.course_count + b.round_revision) as revision_score
+									from	(
+												select	a.member_seq, b.nick_name, b.user_id, b.gender, b.skil_level, a.score, a.course_count, a.round_count
+												from	(
+															select	a.member_seq, sum(score) as score, count(*) as course_count, sum(round_count) as round_count
+															from	(
+																		select	b.member_seq, a.golf_club_id, min(ifnull(score,0)) as score, count(*) as round_count
+																		from	games a,
+																				game_join_members b
+																		where	a.contest_seq = 50
+																		and		a.golf_club_id = 'sejongfield'
+																		and		((a.status = 'end' and a.progress_hole_num = 18) or a.status = 'start')
+																		and		a.game_seq = b.game_seq
+																		group by b.member_seq, a.golf_club_id
+																	) a
+															group by member_seq
+														) a,
+														members b
+												where	a.member_seq = b.member_seq
+											) a,
+											(
+												select	a.contest_seq, a.female_revision, b.skil_level_id, b.skil_revision, 
+														ifnull(c.round_count1,0) as round_count1, ifnull(c.round_count2,9999) as round_count2, ifnull(c.round_revision,0) as round_revision 
+												from	contests a 
+														cross join
+														(
+															select	b.contest_seq, a.skil_level_id, ifnull(b.skil_revision,0) as skil_revision 
+															from	skil_levels a 
+																	left join
+																	contest_skil_level_revisions b
+																	on(a.skil_level_id = b.skil_level_id and b.contest_seq = 50)
+														) b
+														left join (select * from contest_round_revisions where contest_seq = 50) c
+														on (a.contest_seq = c.contest_seq)
+												where	a.contest_seq = 50
+											) b
+									where	a.skil_level = b.skil_level_id
+									and		a.round_count between b.round_count1 and b.round_count2
+								) a
+					) a,
+					games b,
+					game_join_members c
+			where	b.game_id = '18-31-BF-C9-2B-23.20210322090129'
+			and		b.game_seq = c.game_seq
+			and		a.member_seq = c.member_seq
+		) a,
+		(
+			select	*
+			from	(
+						select	RANK() OVER (order by revision_score asc) as ranking, a.member_seq, a.nick_name, a.user_id, a.gender, a.skil_level, 
+								a.score, a.revision_score, a.course_count, a.round_count,
+								a.female_revision+a.skil_revision+a.round_revision as all_revision, a.female_revision, a.skil_revision, a.round_revision
+						from	(
+									select	a.member_seq, a.nick_name, a.user_id, a.gender, a.skil_level, a.score, a.course_count, a.round_count,
+											if(a.gender='female', a.course_count*b.female_revision,0) as female_revision,
+											b.skil_revision*a.course_count as skil_revision,
+											b.round_revision as round_revision,
+											(score + if(a.gender='female', a.course_count*b.female_revision,0) + b.skil_revision*a.course_count + b.round_revision) as revision_score
+									from	(
+												select	a.member_seq, b.nick_name, b.user_id, b.gender, b.skil_level, a.score, a.course_count, a.round_count
+												from	(
+															select	a.member_seq, sum(score) as score, count(*) as course_count, sum(round_count) as round_count
+															from	(
+																		select	b.member_seq, a.golf_club_id, min(ifnull(score,0)) as score, count(*) as round_count
+																		from	games a,
+																				game_join_members b
+																		where	a.contest_seq = 50
+																		and		a.golf_club_id = 'sejongfield'
+																		and		((a.status = 'end' and a.progress_hole_num = 18) or a.status = 'start')
+																		and		a.game_seq = b.game_seq
+																		group by b.member_seq, a.golf_club_id
+																	) a
+															group by member_seq
+														) a,
+														members b
+												where	a.member_seq = b.member_seq
+											) a,
+											(
+												select	a.contest_seq, a.female_revision, b.skil_level_id, b.skil_revision, 
+														ifnull(c.round_count1,0) as round_count1, ifnull(c.round_count2,9999) as round_count2, ifnull(c.round_revision,0) as round_revision 
+												from	contests a 
+														cross join
+														(
+															select	b.contest_seq, a.skil_level_id, ifnull(b.skil_revision,0) as skil_revision 
+															from	skil_levels a 
+																	left join
+																	contest_skil_level_revisions b
+																	on(a.skil_level_id = b.skil_level_id and b.contest_seq = 50)
+														) b
+														left join (select * from contest_round_revisions where contest_seq = 50) c
+														on (a.contest_seq = c.contest_seq)
+												where	a.contest_seq = 50
+											) b
+									where	a.skil_level = b.skil_level_id
+									and		a.round_count between b.round_count1 and b.round_count2
+								) a
+					) a
+			) b
+where	b.ranking between a.ranking -4 and a.ranking + 4
+order by a.member_seq, b.ranking;
+;
+
+// 구버전
+		select	a.member_seq as me_member_seq, a.nick_name as me_nick_name, a.score as me_score, a.ranking as me_ranking, a.revision as me_revision, a.revision_score as me_revision_score,
+				b.member_seq, b.nick_name, b.score, b.ranking, b.revision, b.revision_score
+		from	(
+					select	a.member_seq, a.nick_name, a.score, a.ranking, revision, revision_score
+					from	(
+								select	a.member_seq, a.nick_name, score, RANK() OVER (order by revision_score asc) as ranking, revision, revision_score
+								from	(
+											select	a.member_seq, a.nick_name, a.score, if(b.gender = 'female', -1,0) as revision, a.score + if(b.gender = 'female', -1, 0) as revision_score
+											from	(
+														select	b.member_seq, c.nick_name, min(score) as score
+														from	games a,
+																game_join_members b,
+																members c
+														where	a.contest_seq = #{contest_seq}
+														and		a.golf_club_id = #{golf_club_id}
+														and		a.game_seq = b.game_seq
+														and		((a.status = 'end' and a.progress_hole_num = 18) or a.status = 'start')
+														and		b.member_seq = c.member_seq
+														group by member_seq, nick_name
+													) a,
+													members b
+											where	a.member_seq = b.member_seq
+										) a
+							) a,
+							games b,
+							game_join_members c
+					where	b.game_id = #{game_id}
+					and		b.game_seq = c.game_seq
+					and		a.member_seq = c.member_seq
+				) a,
+				(
+					select	member_seq, nick_name, score, ranking, revision, revision_score
+					from	(
+								select	a.member_seq, a.nick_name, score, RANK() OVER (order by revision_score asc) as ranking, revision, revision_score
+								from	(
+											select	a.member_seq, a.nick_name, a.score, if(b.gender = 'female', -1,0) as revision, a.score + if(b.gender = 'female', -1, 0) as revision_score
+											from	(
+														select	b.member_seq, c.nick_name, min(score) as score
+														from	games a,
+																game_join_members b,
+																members c
+														where	a.contest_seq = #{contest_seq}
+														and		a.golf_club_id = #{golf_club_id}
+														and		a.game_seq = b.game_seq
+														and		((a.status = 'end' and a.progress_hole_num = 18) or a.status = 'start')
+														and		b.member_seq = c.member_seq
+														group by member_seq, nick_name
+													) a,
+													members b
+											where	a.member_seq = b.member_seq
+										) a
+							) x
+				) b
+		where	b.ranking between a.ranking -4 and a.ranking + 4
+		order by a.member_seq, b.ranking
+
+
+/********************************************************************************************************************************/
+/* 대회 참가자 모든 선수의 실시간 랭킹정보 (코스합산)
+/* 		- 코스별 할려면 코스를 추가하면 됨																						*/
+/********************************************************************************************************************************/
+select	RANK() OVER (order by revision_score asc) as ranking, a.member_seq, a.nick_name, a.user_id, a.gender, a.skil_level, 
+		a.score, a.revision_score, a.course_count, a.round_count,
+		a.female_revision+a.skil_revision+a.round_revision as all_revision, a.female_revision, a.skil_revision, a.round_revision
+from	(
+			select	a.member_seq, a.nick_name, a.user_id, a.gender, a.skil_level, a.score, a.course_count, a.round_count,
+					if(a.gender='female', a.course_count*b.female_revision,0) as female_revision,
+					b.skil_revision*a.course_count as skil_revision,
+					b.round_revision as round_revision,
+					(score + if(a.gender='female', a.course_count*b.female_revision,0) + b.skil_revision*a.course_count + b.round_revision) as revision_score
+			from	(
+						select	a.member_seq, b.nick_name, b.user_id, b.gender, b.skil_level, a.score, a.course_count, a.round_count
+						from	(
+									select	a.member_seq, sum(score) as score, count(*) as course_count, sum(round_count) as round_count
+									from	(
+												select	b.member_seq, a.golf_club_id, min(ifnull(score,0)) as score, count(*) as round_count
+												from	games a,
+														game_join_members b
+												where	a.contest_seq = 50
+												and		((a.status = 'end' and a.progress_hole_num = 18) or a.status = 'start')
+												and		a.game_seq = b.game_seq
+												group by b.member_seq, a.golf_club_id
+											) a
+									group by member_seq
+								) a,
+								members b
+						where	a.member_seq = b.member_seq
+					) a,
+					(
+						select	a.contest_seq, a.female_revision, b.skil_level_id, b.skil_revision, 
+								ifnull(c.round_count1,0) as round_count1, ifnull(c.round_count2,9999) as round_count2, ifnull(c.round_revision,0) as round_revision 
+						from	contests a 
+								cross join
+								(
+									select	b.contest_seq, a.skil_level_id, ifnull(b.skil_revision,0) as skil_revision 
+									from	skil_levels a 
+											left join
+											contest_skil_level_revisions b
+											on(a.skil_level_id = b.skil_level_id and b.contest_seq = 50)
+								) b
+								left join (select * from contest_round_revisions where contest_seq = 50) c
+								on (a.contest_seq = c.contest_seq)
+						where	a.contest_seq = 50
+					) b
+			where	a.skil_level = b.skil_level_id
+			and		a.round_count between b.round_count1 and b.round_count2
+		) a
+		
+
+///////////////////////////////////////////
+// longest, nearest
+select	*
+from	(
+			select	a.golf_club_id, a.member_seq, round(a.longest,2) as longest, round(a.nearest,2) as nearest,
+					RANK() OVER (PARTITION BY a.golf_club_id ORDER BY a.longest DESC) as longest_rank,
+					RANK() OVER (PARTITION BY a.golf_club_id ORDER BY a.nearest ASC) as nearest_rank
+			from	(		
+						select	a.golf_club_id, b.member_seq, max(longest) as longest, min(nearest) as nearest
+						from	games a,
+								game_join_members b
+						where	a.contest_seq = '69'
+						and		a.status = 'end' and a.progress_hole_num = 18
+						and		a.game_seq = b.game_seq
+						and		(b.longest > 0 or b.nearest  <  9999)
+						group by golf_club_id, b.member_seq
+					) a
+		) a
+where	a.longest_rank = 1 or a.nearest_rank = 1;		
+
+
+/********************************************************************************************************************************************************************************************************/
+// 홀인원
+select	 c.created_at, store_name, a.member_seq, a.user_id, a.nick_name, a.name, a.email, a.handphone, a.gender, 
+		 if(a.game_seq = b.game_seq,holein_type_name,'') as holeinone, 
+		 if(a.game_seq = b.game_seq, par_score,'') as par_score, 
+		 if(a.game_seq = b.game_seq, a.score,'') as score, 
+		 a.mulligan_used_count,
+		 d.golf_club_name, if(a.game_seq = b.game_seq, a.progress_hole_num ,'') as hole,
+		 c.season, a.game_seq, b.game_seq, c.progress_hole_num 
+from	(
+			select	record_date, holein_type_name, par_score, score, mulligan_used_count, store_name, golf_club_name, progress_hole_num, member_seq, user_id, nick_name, name, email, handphone, gender, game_seq
+			from	(
+				select 	a.game_seq, a.team_seq, a.golf_club_id, a.golf_course_seq, a.hole_seq, a.progress_hole_num, a.hole_tar,
+						a.hole_putting, a.green_on, a.mulligan_used_count, a.updated_at, substr(a.created_at,1,16) as record_date,
+						b.par_score, a.score,
+						if(a.score = -2, 'holeinone', if(a.score = -3, if(b.par_score = 5,'albatross','holeinone'),'holeinone')) as holein_type,
+						if(a.score = -2, '홀인원', if(a.score = -3, if(b.par_score = 5,'알바트로스','홀인원'),'홀인원')) as holein_type_name,
+						c.member_seq, c.member_yn, c.nick_name, x1.user_id, x1.name, x1.email, x1.handphone, x1.birthday, gender,
+						d.store_seq, d.room_seq,
+						e.game_mode, e.game_type, e.game_difficulty, e.season,
+						f.golf_club_name,
+						g.store_name
+				from 	game_holes a,
+						course_holes b,
+						game_join_members c left join members x1 on (c.member_seq = x1.member_seq),
+						game_rooms d,
+						games e,
+						golf_clubs f,
+						stores g
+				where	a.golf_club_id = b.golf_club_id
+				and		a.golf_course_seq = b.golf_course_seq 
+				and		a.hole_seq = b.hole_seq
+				and		((b.par_score = 3 and a.score = -2) or(a.score = -3))
+--				and		a.mulligan_used_count > 0
+				and		a.game_seq = c.game_seq
+				and		a.team_seq = c.team_seq
+				and		c.game_seq = d.game_seq
+				and		c.game_room_seq = d.game_room_seq
+				and		a.game_seq = e.game_seq
+				and		e.golf_club_id = f.golf_club_id
+				and		d.store_seq = g.store_seq
+				and		a.created_at between '2021-03-01 00:00:00' and '2021-03-31 23:59:59'
+				and		c.member_yn = 'y'
+				and		e.game_mode = 'stroke'
+				order by a.created_at desc
+			) x
+		) a ,
+		game_join_members b,
+		games c,
+		golf_clubs d
+where	a.member_seq = b.member_seq		
+and		b.game_seq = c.game_seq
+and		c.golf_club_id = d.golf_club_id 
+and		c.progress_hole_num = 18
+and		c.created_at between '2021-03-01 00:00:00' and '2021-03-31 23:59:59'
+
+/********************************************************************************************************************************************************************************************************/
+사용자 홀인원
+select * from members where nick_name = '해남씨대표';
+
+select	a.member_seq, a.nick_name, b.game_seq, b.score, c.par_score, d.start_date, d.season 
+from	game_join_members a,
+		game_holes b,
+		course_holes c,
+		games d
+where	a.member_seq = 768
+and		a.game_seq = b.game_seq
+and		b.golf_club_id = c.golf_club_id 
+and		b.golf_course_seq = c.golf_course_seq 
+and		b.hole_seq = c.hole_seq
+and		b.score <= -2
+and		a.game_seq = d.game_seq
+and		b.start_date between '2021-03-01 00:00:00' and '2021-03-31 23:59:59';
+
+사용자 게임내역
+select	a.member_seq, a.nick_name, b.game_seq, b.start_date, b.season, b.progress_hole_num, b.status 
+from	game_join_members a,
+		games b
+where	a.member_seq = 768
+and		a.game_seq = b.game_seq
+and		b.start_date between '2021-03-01 00:00:00' and '2021-03-31 23:59:59';
+
+
+
+/********************************************************************************************************************************************************************************************************/
+대회 삭제
+
+set autocommit=0;
+start transaction;
+commit;
+rollback;
+
+대회삭제
+select count(*) from game_hole_shots a inner join games b on a.game_seq = b.game_seq where b.contest_seq in (62,68,70);
+select * from game_hole_shots a inner join games b on a.game_seq = b.game_seq where b.contest_seq in (62,68,70);
+select * from game_holes where game_seq in (select game_seq from games where contest_seq in(62,68,70));
+select * from game_join_members where game_seq in (select game_seq from games where contest_seq in(62,68,70));
+select * from game_teams where game_seq in (select game_seq from games where contest_seq in(62,68,70));
+select * from game_rooms where game_seq in (select game_seq from games where contest_seq in(62,68,70));
+select * from game_courses where game_seq in (select game_seq from games where contest_seq in(62,68,70));
+select * from fare_allocation_hists where game_seq in (select game_seq from games where contest_seq in(62,68,70));
+select * from free_round_hists where game_seq in (select game_seq from games where contest_seq in(62,68,70));
+select * from games where game_seq in (select game_seq from games where contest_seq in(62,68,70));
+select * from contest_golf_system_clubs where contest_seq in(62,68,70);
+select * from contests where contest_seq in (62,68,70);
+
+delete a from game_hole_shots a inner join games b on a.game_seq = b.game_seq where b.contest_seq in (62,68,70);
+delete a from game_holes a inner join games b on a.game_seq = b.game_seq where b.contest_seq in (62,68,70);
+delete from game_join_members where game_seq in (select game_seq from games where contest_seq in(62,68,70));
+delete from game_teams where game_seq in (select game_seq from games where contest_seq in(62,68,70));
+delete from game_rooms where game_seq in (select game_seq from games where contest_seq in(62,68,70));
+delete from game_courses where game_seq in (select game_seq from games where contest_seq in(62,68,70));
+delete from fare_allocation_hists where game_seq in (select game_seq from games where contest_seq in(62,68,70));
+delete from free_round_hists where game_seq in (select game_seq from games where contest_seq in(62,68,70));
+delete from games where game_seq in (select game_seq from games where contest_seq in(62,68,70));
+delete from contest_golf_system_clubs where contest_seq in (62,68,70);
+delete from contests where contest_seq in (62,68,70);
+
+
